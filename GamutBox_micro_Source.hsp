@@ -1,0 +1,712 @@
+/*--------------------------------------------------------------------------------------------------
+
+									 	 Gamut Box micro
+	
+									 	 	Ver.0.1
+
+--------------------------------------------------------------------------------------------------*/
+
+*func
+#uselib "gdi32.dll"
+#func GetTextExtentPoint32 "GetTextExtentPoint32A" int,int,int,int
+#func AddFontMemResourceExA "AddFontMemResourceEx" sptr,int,int,int
+	
+*modules
+#module
+
+/*半透明色表示命令*/
+#deffunc sboxf int depth, int ax, int ay, int bx, int by
+	pdx = ax, bx, bx, ax
+	pdy = ay, ay, by, by
+	gmode 3,,,depth
+	gsquare -1,pdx, pdy
+	
+	return
+	
+/*指定された範囲内にマウスがあるか確認する関数（使用例：click_range (100, 0, 300, 300) ）*/
+#defcfunc click_range int mx, int my, int mx2, int my2
+	if mx <= mousex and mx2 >= mousex and my <= mousey and my2 >= mousey {
+		return 1
+	}else{
+		return 0
+	}
+	
+/*各項目の読み込み（使用例：get_chapter(元の変数, "検索する項目", "始点区切りコード", "終端コード") ）*/
+#defcfunc get_chapter var underlying_var, str search_chapter, str punctuate, str end_word, int chars
+	value = instr(underlying_var, 0, search_chapter)
+	get_chapter_buf = strmid ( underlying_var, value + strlen(""+search_chapter+""+punctuate+""), instr(underlying_var, value + strlen(""+search_chapter+""+punctuate+""), end_word) )
+	
+	//文字数で指定している場合
+		if end_word = "%chars" {
+			notesel underlyring_var
+			get_chapter_buf = strmid ( underlying_var, value + strlen(""+search_chapter+""+punctuate+""), chars )
+		}
+	
+	return get_chapter_buf
+	
+/*文字列の幅を取得*/
+#deffunc GetTxtExtPoint var tBuf,array tSize
+	txtLen=strlen(tBuf)
+	dim tSize,2
+	GetTextExtentPoint32@ hdc,varptr(tBuf),txtLen,varptr(tSize)
+	return
+	
+/*文字を中央に表示（使用例：cmes "hogehoge", 0, 640, 0, 480, 0）*/
+#deffunc cmes str ctext, int cx, int cy, int cx2, int cy2, int redraw_exist
+	#include "user32.as"
+	RECT = cx, cy, cx2, cy2
+	DrawText hdc, ctext, -1, varptr(RECT), $01
+	
+	if redraw_exist = 0 : redraw 1
+	return
+	
+#global
+
+*buffering
+	//再生ボタン
+		buffer 1, 20, 20
+			color 50, 50, 50 : boxf
+		
+			color 0, 162, 232
+				line 0, 0, 0, 20
+				line 0, 0, 20, 20/2
+				line 0, 20, 20, 20/2
+	
+	//一時停止ボタン
+		buffer 2, 20, 20
+			color 50, 50, 50 : boxf
+		
+			color 0, 162, 232
+				line 3, 0, 3, 20
+				line 20-3, 0, 20-3, 20
+	
+	//再生停止ボタン
+		buffer 3, 20, 20
+			color 50, 50, 50 : boxf
+		
+			color 0, 162, 232
+				line 0, 0, 0, 20
+				line 0, 0, 20, 0
+				line 0, 20-1, 20-1, 20-1
+				line 20-1, 0, 20-1, 20-1
+	
+	//ファイルを開くボタン
+		buffer 4, 20, 20
+			color 0, 0, 0 : boxf
+	
+			color 255, 255, 255
+				pset 5, 20-5
+				pset 10, 20-5
+				pset 15, 20-5
+	
+	//最小化ボタン
+		buffer 5, 20, 20
+			color 0, 0, 0 : boxf
+	
+			color 255, 255, 255
+				line 5, 20-5, 20-5, 20-5
+	
+	//閉じるボタン
+		buffer 6, 20, 20
+			color 0, 0, 0 : boxf
+	
+			color 255, 255, 255
+				line 5, 5, 20-5, 20-5
+				line 5, 20-5, 20-5, 5
+	
+	//ピン留めボタン
+		celload "img/ping.png", 7
+	
+	//トラックボタン
+		celload "img/tr_r.png", 8
+		celload "img/tr_n.png", 9
+	
+	gsel 0
+	
+*startup
+	bgscr 0, 200, 120
+	
+	onclick gosub *on_click
+	
+	mode = "standby"
+	AppFont = "Meiryo"
+	
+	//"GamutBox_micro" mci登録
+		mci "set GamutBox_micro time format milliseconds"
+	
+	//フォント登録
+		notesel newfont
+		noteload "data/chogokubosogothic_5.ttf"
+		AddFontMemResourceExA varptr(newfont), strsize, 0, varptr(pcFonts)
+		hFont = stat ; フォントハンドル
+	
+		PosFont = "超極細ゴシック"
+	
+	//変数を初期化
+		windowx = 200
+		windowy = 120
+	
+	//現在のディレクトリ
+		GB_Dir = dirinfo(0)
+	
+*File_open
+	/*ファイルを開く*/
+	
+	mci "close GamutBox_micro"
+	
+	dialog "gbl;*.url;*.wav;*.mp3;*.wma;*.asf", 16, "リストファイル、インターネットショートカット または 再生ファイル"
+	
+	if stat = 0 {
+		goto *main
+	}
+	
+	if stat = 1 {
+		Opened_File = refstr
+		file_name = getpath(Opened_File, 8)
+		file_name_without_extension = getpath(Opened_File, 9)
+	
+		exist_Lyrics = 0
+		PlayList_mode = 0
+	
+		an_Lyric = ""
+	
+		clrobj
+		
+		if getpath(Opened_File, 2) = ".url" {
+			gosub *open_URL_File
+			goto *main
+		}
+	
+		if getpath(Opened_File, 2) = ".gbl" {
+			gosub *open_List_File
+			goto *main
+		}
+		
+		mci "open \""+Opened_File+"\" alias GamutBox_micro"
+		mci "play GamutBox_micro"
+		
+		mode = "play"
+	
+		//歌詞ファイルがあるか確認
+			chdir GB_Dir
+			
+			exist "lyrics/"+file_name_without_extension+".lrc"
+			
+			if strsize != -1 {
+				exist_Lyrics = 1
+				Lyrics_File = "lyrics/"+file_name_without_extension+".lrc"
+			}
+	}
+	
+	goto *main
+	
+*main	
+	color 50, 50, 50 : boxf
+	color 0, 0, 0 : sboxf 128, 0, 0, 200, 20
+	
+	font AppFont, 10 : color 255, 255, 255
+	pos 5, 3 : mes "Gamut Box micro"
+	
+	//タイトルバー部分のボタン設置
+		pos 120, 0 : gmode 2 : gcopy 4, 0, 0, 20, 20
+		
+		if forefront = 0 {
+			pos 140, 0 : gmode 2 : gcopy 7, 0, 0, 20, 20
+		} else {
+			pos 140, 0 : gmode 2 : gcopy 7, 0, 20, 20, 20
+		}
+		
+		pos 160, 0 : gmode 2 : gcopy 5, 0, 0, 20, 20
+		pos 180, 0 : gmode 2 : gcopy 6, 0, 0, 20, 20
+	
+	//再生ボタン類設置
+		objsize 20, 20
+			
+		pos 120, 40 : objimage 1 : button "", *play
+		pos 145, 40 : objimage 2 : button "", *pause
+		pos 170, 40 : objimage 3 : button "", *play_stop
+	
+	if mode = "play" {
+		goto *play
+	}
+	
+	stop
+	
+*play
+	if mode = "Internet" or mode = "standby" {
+		stop
+	}
+	
+	mci "play GamutBox_micro"
+	
+	repeat
+		redraw 0
+		
+		color 50, 50, 50 : boxf 0, 35, 120, 120
+		color 50, 50, 50 : boxf 0, 70, 200, 120
+	
+		//再生位置の取得＆表示
+			gosub *get_PlayPos
+			
+			font PosFont, 30 : color 0, 162, 232
+			pos 20, 35 : mes ""+strf("%02d",PlayPos__Min)+":"+strf("%02d",PlayPos__Sec)+""
+	
+		//タイトルの表示
+			font AppFont, 10 : color 0, 162, 232
+	
+			GetTxtExtPoint file_name, textSize
+	
+			if textSize > windowx-21 {
+				textX -= 1
+	
+				if textX < textSize*(-1) {
+					textX = windowx
+				}
+				
+			} else : if PlayList_mode = 1 and textSize > windowx-60 {
+				textX -= 1
+	
+				if textX < textSize*(-1) {
+					textX = windowx-60
+				}
+	
+			} else {
+				textX = 21
+				
+			}
+	
+			pos textX, 68 : mes file_name
+	
+		//ピン留め（最前面表示）ボタン
+			if forefront = 0 {
+				pos 140, 0 : gmode 2 : gcopy 7, 0, 0, 20, 20
+			} else {
+				pos 140, 0 : gmode 2 : gcopy 7, 0, 20, 20, 20
+			}
+	
+		//シークバーの表示
+			color 0, 162, 232
+			line 10, 95, double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10, 95
+	
+			color 18, 83, 164
+			circle (double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10)-3, 95-3, (double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10)+3, 95+3
+	
+		//シークバー上にカーソルがある時
+			if click_range(10, 95-3, 200-10, 95+3) = 1 {
+				color 128, 128, 128
+				
+				if mousex < double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 {
+					line mousex, 95, double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 - 3, 95
+				}
+				if mousex > double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 {
+					line double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 + 3, 95, mousex, 95
+				}
+	
+				circle mousex-3, 95-3, mousex+3, 95+3
+	
+				Seek_tmp = double(windowx-10-10)/(PlayLength__Min*60 + PlayLength__Sec)
+				
+				point_Minute = (double(mousex-10.0)/double(Seek_tmp)/60.0)
+				point_Second = (double(mousex-10.0)/double(Seek_tmp)\60.0)
+	
+				font AppFont, 10
+				pos mousex-10, 95-15 : mes ""+strf("%02d",point_Minute)+":"+strf("%02d",point_Second)+""
+			}
+	
+		//歌詞を取得
+			if exist_Lyrics = 1 {
+				gosub *get_Lyrics
+			}
+	
+		//歌詞を表示
+			if exist_Lyrics = 1 {
+				font AppFont, 10 : color 255, 255, 255
+				cmes ""+an_Lyric+"", 0, 100, windowx, windowy
+			}
+	
+		//トラックボタン設置（リスト再生時のみ）
+			if PlayList_mode = 1 {
+				color 50, 50, 50 : boxf 140, 64, 200, 84
+				
+				pos 145, 64 : gmode 2 : gcopy 8, 0, 0, 20, 20
+				pos 170, 64 : gmode 2 : gcopy 9, 0, 0, 20, 20
+			}
+	
+		//再生が終わったとき
+			if PlayPos__Min = PlayLength__Min and PlayPos__Sec = PlayLength__Sec {
+				if PlayPos__Min = 0 and PlayPos__Sec = 0 {
+	
+				} else : if PlayList_mode = 1 {
+					mci "close GamutBox_micro"
+					
+					ListNum++
+					gosub *List_get_next
+	
+					textX = 21
+					
+					break
+				}
+			}
+			
+		redraw 1
+		
+		await 50
+	loop
+	
+	if PlayList_mode = 1 {
+		goto *play
+	}
+	
+	stop
+	
+*pause
+	if mode = "Internet" or mode = "standby" {
+		stop
+	}
+	
+	mci "pause GamutBox_micro"
+	mode = "pause"
+	
+	repeat
+		redraw 0
+		
+		color 50, 50, 50 : boxf 0, 35, 120, 120
+		color 50, 50, 50 : boxf 0, 70, 200, 120
+	
+		//再生位置の取得＆表示
+			gosub *get_PlayPos
+			
+			font PosFont, 30 : color 0, 162, 232
+			pos 20, 35 : mes ""+strf("%02d",PlayPos__Min)+":"+strf("%02d",PlayPos__Sec)+""
+	
+		//タイトルの表示
+			font AppFont, 10 : color 0, 162, 232
+	
+			GetTxtExtPoint file_name, textSize
+	
+			if textSize > windowx-21 {
+				textX -= 1
+	
+				if textX < textSize*(-1) {
+					textX = windowx
+				}
+				
+			} else : if PlayList_mode = 1 and textSize > windowx-60 {
+				textX -= 1
+	
+				if textX < textSize*(-1) {
+					textX = windowx-60
+				}
+	
+			} else {
+				textX = 21
+				
+			}
+	
+			pos textX, 68 : mes file_name
+	
+		//ピン留め（最前面表示）ボタン
+			if forefront = 0 {
+				pos 140, 0 : gmode 2 : gcopy 7, 0, 0, 20, 20
+			} else {
+				pos 140, 0 : gmode 2 : gcopy 7, 0, 20, 20, 20
+			}
+	
+		//シークバーの表示
+			color 0, 162, 232
+			line 10, 95, double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10, 95
+	
+			color 18, 83, 164
+			circle (double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10)-3, 95-3, (double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10)+3, 95+3
+	
+		//シークバー上にカーソルがある時
+			if click_range(10, 95-3, 200-10, 95+3) = 1 {
+				color 128, 128, 128
+				
+				if mousex < double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 {
+					line mousex, 95, double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 - 3, 95
+				}
+				if mousex > double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 {
+					line double(PlayPos__stat)/PlayLength__stat*(200-10-10) + 10 + 3, 95, mousex, 95
+				}
+	
+				circle mousex-3, 95-3, mousex+3, 95+3
+	
+				Seek_tmp = double(windowx-10-10)/(PlayLength__Min*60 + PlayLength__Sec)
+				
+				point_Minute = (double(mousex-10.0)/double(Seek_tmp)/60.0)
+				point_Second = (double(mousex-10.0)/double(Seek_tmp)\60.0)
+	
+				font AppFont, 10
+				pos mousex-10, 95-15 : mes ""+strf("%02d",point_Minute)+":"+strf("%02d",point_Second)+""
+			}
+	
+		//歌詞を表示
+			if exist_Lyrics = 1 {
+				font AppFont, 10 : color 255, 255, 255
+				cmes ""+an_Lyric+"", 0, 100, windowx, windowy
+			}
+	
+		//トラックボタン設置（リスト再生時のみ）
+			if PlayList_mode = 1 {
+				color 50, 50, 50 : boxf 140, 64, 200, 84
+				
+				pos 145, 64 : gmode 2 : gcopy 8, 0, 0, 20, 20
+				pos 170, 64 : gmode 2 : gcopy 9, 0, 0, 20, 20
+			}
+	
+		redraw 1
+		await 50
+	loop
+	
+	stop
+	
+*play_stop
+	if mode = "Internet" {
+		stop
+	}
+	
+	mci "close GamutBox_micro"
+	mode = "standby"
+	
+	color 50, 50, 50 : boxf 0, 35, 200, 120
+	
+	stop
+	
+*open_URL_File
+#define DIID_DWebBrowserEvents2 "{34A715A0-6587-11D0-924A-0020AFC7AC4D}"
+	sdim sText, 512
+	sdim url, 512
+	
+	notesel url_file
+	noteload Opened_File
+	
+	url = get_chapter(url_file, "URL", "=", "%chars", strlen(url_file))
+	
+	pos -1, -1 : axobj IE, "Shell.Explorer.2", 1, 1
+	comevent ie_event, IE, DIID_DWebBrowserEvents2, *net_event
+	
+	IE->"Navigate" url
+	
+	mode = "Internet"
+	
+	return
+	
+*net_event
+	DispID = comevdisp(ie_event)
+	if DispID = 113 {
+		comevarg sText, ie_event, 0
+	
+		color 50, 50, 50 : boxf 0, 200, 50, 120
+	
+		color 0, 162, 232
+	
+		if instr(sText, 0, "http") = -1 {
+			font AppFont, 10 : color 0, 162, 232
+			pos 21, 68 : mes sText(0)
+		} else {
+			font AppFont, 8 : color 0, 162, 232
+			pos 21, 80 : mes sText(0)
+		}
+	}
+	
+	return
+	
+*track_return
+	ListNum--
+	
+	mci "close GamutBox_micro"
+	
+	textX = 21
+	
+	goto *List_get_before
+	
+*track_next
+	ListNum++
+	
+	mci "close GamutBox_micro"
+	
+	textX = 21
+	
+	goto *List_get_next
+	
+*open_List_File
+	notesel Play_List
+	noteload Opened_File
+	
+	sdim List, 256, notemax
+	
+	repeat	notemax
+		notesel Play_List
+		noteget Play_List_tmp, cnt
+	
+		List(cnt) = Play_List_tmp
+	loop
+	
+	PlayList_mode = 1
+	
+	ListNum = 0
+	ListNum_max = notemax
+	
+	mode = "play"
+	
+	goto *List_get_next
+	
+*List_get_before
+	if ListNum  < 0 {
+		ListNum = ListNum_max - 1
+	}
+	
+	exist_Lyrics = 0
+	an_Lyric = ""
+	
+	mci "open \""+List(ListNum)+"\" alias GamutBox_micro"
+	mci "play GamutBox_micro"
+	
+	//歌詞ファイルがあるか確認
+		chdir GB_Dir
+	
+		file_name = getpath(List(ListNum), 8)
+		file_name_without_extension = getpath(List(ListNum), 9)
+		
+		exist "lyrics/"+file_name_without_extension+".lrc"
+		
+		if strsize != -1 {
+			exist_Lyrics = 1
+			Lyrics_File = "lyrics/"+file_name_without_extension+".lrc"
+		}
+	
+	return
+	
+*List_get_next
+	if ListNum + 1 > ListNum_max {
+		ListNum = 0
+	}
+	
+	exist_Lyrics = 0
+	an_Lyric = ""
+	
+	mci "open \""+List(ListNum)+"\" alias GamutBox_micro"
+	mci "play GamutBox_micro"
+	
+	//歌詞ファイルがあるか確認
+		chdir GB_Dir
+	
+		file_name = getpath(List(ListNum), 8)
+		file_name_without_extension = getpath(List(ListNum), 9)
+		
+		exist "lyrics/"+file_name_without_extension+".lrc"
+		
+		if strsize != -1 {
+			exist_Lyrics = 1
+			Lyrics_File = "lyrics/"+file_name_without_extension+".lrc"
+		}
+	
+	return
+	
+*get_PlayPos
+	/*再生位置と曲の長さの取得*/
+	
+	mci"status GamutBox_micro position"
+	
+		PlayPos__Min = stat/1000/60
+		PlayPos__Sec = stat/1000\60
+		PlayPos__Miri = stat/10\100
+		PlayPos__stat = stat
+	
+	mci "status GamutBox_micro length"
+	
+		PlayLength__Min = stat/1000/60
+		PlayLength__Sec = stat/1000\60
+		PlayLength__Miri = stat/10\100
+		PlayLength__stat = stat
+	
+	return
+	
+*get_Lyrics
+	notesel Lyrics
+	noteload Lyrics_File
+	
+	//文字化け回避
+		#include "hspinet.as"
+		nkfcnv Lyrics, Lyrics, "s"
+	
+	repeat notemax
+		notesel Lyrics
+		noteget Lyrics_tmp, cnt
+		
+		if instr(Lyrics_tmp, 0, "["+strf("%02d",PlayPos__Min)+":"+strf("%02d",PlayPos__Sec)+":"+(PlayPos__Miri/10)+"0]") != -1 {
+			split Lyrics_tmp, ":"+(PlayPos__Miri/10)+"0]", strtmp, an_Lyric
+			break
+		}
+	loop
+	
+	return
+	
+*on_click
+	//ボタンが押された場合
+		if click_range(120, 0, 120+20, 20) = 1 {
+			gosub *File_open
+		}
+		if click_range(140, 0, 140+20, 20) = 1 {
+			gosub *ping
+		}
+		if click_range(160, 0, 160+20, 20) = 1 {
+			gosub *minimize
+		}
+		if click_range(180, 0, 180+20, 20) = 1 {
+			goto *close
+		}
+	
+	//シークバー上でクリックした場合（再生位置の変更）
+		if click_range(5, 95-3, 200-5, 95+3) = 1 {
+			Seek = int(point_Minute)*60 + int(point_Second)
+			
+			mci "set GamutBox_micro time format ms"
+			mci "seek GamutBox_micro to "+int(seek)+"000"
+			mci "play GamutBox_micro"
+	
+			mode = "play"
+	
+			color 50, 50, 50 : boxf 0, 35, 120, 120
+			color 50, 50, 50 : boxf 0, 70, 200, 120
+			
+			return
+		}
+	
+	//トラックボタン
+		if PlayList_mode = 1 {
+			if click_range(145, 64, 145+20, 64+20) = 1 {
+				gosub *track_return
+			}
+			if click_range(170, 64, 170+20, 64+20) = 1 {
+				gosub *track_next
+			}
+		}
+		
+	//ウィンドウを動かす
+		if 0<= mousex & 200 >= mousex and 0<= mousey & 20 >= mousey{
+			if wparam=1 : sendmsg hwnd,$00A1,2,0
+			return
+		}
+	
+	return
+	
+*ping
+	if forefront = 0 {
+		forefront = 1
+		gsel 0, 2
+	
+	} else {
+		forefront = 0
+		gsel 0, 1
+	}
+	
+	return
+	
+*minimize
+	sendmsg hwnd, $112, $F020
+	return
+	
+*close
+	end
